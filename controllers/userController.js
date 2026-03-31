@@ -5,8 +5,21 @@ const { sendPushNotification } = require('../utils/push');
 
 const getUsers = async (req, res) => {
     try {
-        const users = await User.find({ _id: { $ne: req.user._id } }).select('-password -otp -otpExpiry');
-        res.json(users);
+        const currentUser = req.user._id;
+        const users = await User.find({ _id: { $ne: currentUser } })
+            .select('-password -otp -otpExpiry')
+            .lean();
+        
+        const usersWithUnread = await Promise.all(users.map(async (u) => {
+            const unreadCount = await Message.countDocuments({
+                senderId: u._id,
+                receiverId: currentUser,
+                status: 'unseen'
+            });
+            return { ...u, unreadCount };
+        }));
+
+        res.json(usersWithUnread);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }

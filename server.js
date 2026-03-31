@@ -5,6 +5,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const connectDB = require('./config/db');
 const path = require('path');
+const fs = require('fs');
 
 dotenv.config();
 
@@ -13,6 +14,12 @@ connectDB();
 const app = express();
 app.use(express.json());
 app.use(cors());
+
+// Ensure uploads directory exists
+const uploadDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir);
+}
 
 // Serve static uploads
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
