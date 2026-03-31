@@ -40,6 +40,10 @@ const userSchema = mongoose.Schema({
         type: String,
         default: ""
     },
+    publicKey: {
+        type: String,
+        default: ""
+    },
     role: {
         type: String,
         enum: ['user', 'admin'],

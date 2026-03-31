@@ -19,6 +19,10 @@ const messageSchema = mongoose.Schema({
         type: String,
         enum: ['unseen', 'seen'],
         default: 'unseen'
+    },
+    replyTo: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Message'
     }
 }, {
     timestamps: true

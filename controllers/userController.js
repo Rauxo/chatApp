@@ -16,7 +16,21 @@ const getUsers = async (req, res) => {
                 receiverId: currentUser,
                 status: 'unseen'
             });
-            return { ...u, unreadCount };
+
+            const lastMessage = await Message.findOne({
+                $or: [
+                    { senderId: currentUser, receiverId: u._id },
+                    { senderId: u._id, receiverId: currentUser }
+                ]
+            }).sort({ createdAt: -1 }).lean();
+
+            return { 
+                ...u, 
+                unreadCount, 
+                lastMessage: lastMessage 
+                    ? { message: lastMessage.message, createdAt: lastMessage.createdAt, senderId: lastMessage.senderId } 
+                    : null
+            };
         }));
 
         res.json(usersWithUnread);
@@ -90,7 +104,9 @@ const getMessages = async (req, res) => {
                 { senderId: user1, receiverId: user2 },
                 { senderId: user2, receiverId: user1 }
             ]
-        }).sort({ createdAt: 1 });
+        })
+        .populate('replyTo', 'message senderId createdAt')
+        .sort({ createdAt: 1 });
 
         res.json(messages);
     } catch (error) {
@@ -100,14 +116,17 @@ const getMessages = async (req, res) => {
 
 const sendMessage = async (req, res) => {
     try {
-        const { receiverId, messageText } = req.body;
+        const { receiverId, messageText, replyToId } = req.body;
         const senderId = req.user._id;
-
         const message = await Message.create({
             senderId,
             receiverId,
-            message: messageText
+            message: messageText,
+            replyTo: replyToId || undefined
         });
+
+        const populatedMessage = await Message.findById(message._id)
+            .populate('replyTo', 'message senderId createdAt');
 
         const io = req.app.get('io');
         const connectedUsers = req.app.get('connectedUsers');
@@ -115,7 +134,7 @@ const sendMessage = async (req, res) => {
         const receiverSocketId = connectedUsers.get(receiverId);
 
         if (receiverSocketId) {
-            io.to(receiverSocketId).emit('receive_message', message);
+            io.to(receiverSocketId).emit('receive_message', populatedMessage);
         } else {
             // Send push notification
             const receiver = await User.findById(receiverId);
@@ -128,10 +147,44 @@ const sendMessage = async (req, res) => {
             }
         }
 
-        res.json(message);
+        res.json(populatedMessage);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
-module.exports = { getUsers, updateProfile, uploadAvatar, updatePushToken, getMessages, sendMessage };
+const getMe = async (req, res) => {
+    try {
+        const user = await User.findById(req.user._id).select('-password -otp -otpExpiry');
+        if (!user) return res.status(404).json({ message: 'User not found' });
+        res.json(user);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+const updatePublicKey = async (req, res) => {
+    try {
+        const user = await User.findById(req.user._id);
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
+        user.publicKey = req.body.publicKey || user.publicKey;
+        await user.save();
+        res.json({ message: 'Public key updated' });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+const getPublicKey = async (req, res) => {
+    try {
+        const user = await User.findById(req.params.userId).select('publicKey');
+        if (!user) return res.status(404).json({ message: 'User not found' });
+        res.json({ publicKey: user.publicKey });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+module.exports = { getUsers, updateProfile, uploadAvatar, updatePushToken, getMessages, sendMessage, getMe, updatePublicKey, getPublicKey };
+
