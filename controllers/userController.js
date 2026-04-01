@@ -136,16 +136,21 @@ const sendMessage = async (req, res) => {
 
         if (receiverSocketId) {
             io.to(receiverSocketId).emit('receive_message', populatedMessage);
-        } else {
-            // Send push notification
-            const receiver = await User.findById(receiverId);
-            if (receiver && receiver.pushToken) {
-                await sendPushNotification(
-                    [receiver.pushToken],
-                    `${req.user.name} sent you a message!`,
-                    { type: 'chat', messageId: message._id }
-                );
-            }
+        }
+
+        // Always attempt to send push notification if receiver has a token
+        const receiver = await User.findById(receiverId);
+        if (receiver && receiver.pushToken) {
+            // Calculate unread count for badge
+            const unreadCount = await Message.countDocuments({ receiverId, status: 'unseen' });
+            
+            await sendPushNotification(
+                [receiver.pushToken],
+                messageText.length > 50 ? messageText.substring(0, 50) + '...' : messageText,
+                { type: 'chat', senderId: senderId.toString() },
+                `${req.user.name}`,
+                unreadCount
+            );
         }
 
         res.json(populatedMessage);
@@ -244,6 +249,17 @@ const sendFriendRequest = async (req, res) => {
         }
 
         await User.findByIdAndUpdate(targetUserId, { $addToSet: { friendRequests: fromId } });
+
+        // Send Push Notification
+        if (target.pushToken) {
+            await sendPushNotification(
+                [target.pushToken],
+                `${req.user.name} sent you a friend request!`,
+                { type: 'friend_request' },
+                'New Friend Request'
+            );
+        }
+
         res.json({ message: 'Friend request sent' });
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -271,6 +287,17 @@ const acceptFriendRequest = async (req, res) => {
         await User.findByIdAndUpdate(requesterId, {
             $addToSet: { friends: myId }
         });
+
+        // Send Push Notification
+        const requester = await User.findById(requesterId);
+        if (requester && requester.pushToken) {
+            await sendPushNotification(
+                [requester.pushToken],
+                `${me.name} accepted your friend request!`,
+                { type: 'chat', senderId: myId.toString() },
+                'Friend Request Accepted'
+            );
+        }
 
         res.json({ message: 'Friend request accepted' });
     } catch (error) {
