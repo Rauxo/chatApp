@@ -117,7 +117,7 @@ const getMessages = async (req, res) => {
 
 const sendMessage = async (req, res) => {
     try {
-        const { receiverId, messageText, replyToId } = req.body;
+        const { receiverId, messageText, replyToId, notificationText } = req.body;
         const senderId = req.user._id;
         const message = await Message.create({
             senderId,
@@ -146,7 +146,7 @@ const sendMessage = async (req, res) => {
                     $each: [{
                         type: 'chat',
                         senderId: senderId,
-                        message: messageText.length > 50 ? messageText.substring(0, 50) + '...' : messageText,
+                        message: (notificationText || messageText).length > 50 ? (notificationText || messageText).substring(0, 50) + '...' : (notificationText || messageText),
                         createdAt: new Date()
                     }],
                     $slice: -20 // Keep last 20 notifications
@@ -164,12 +164,14 @@ const sendMessage = async (req, res) => {
             }
 
             if (receiver.pushToken) {
+                const pushMsg = notificationText ? notificationText : messageText;
                 await sendPushNotification(
                     [receiver.pushToken],
-                    messageText.length > 50 ? messageText.substring(0, 50) + '...' : messageText,
+                    pushMsg.length > 50 ? pushMsg.substring(0, 50) + '...' : pushMsg,
                     { type: 'chat', senderId: senderId.toString() },
                     `${req.user.name}`,
-                    receiver.unreadMessagesCount + receiver.pendingFriendRequestsCount
+                    receiver.unreadMessagesCount + receiver.pendingFriendRequestsCount,
+                    `chat_${senderId}`
                 );
             }
         }

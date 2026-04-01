@@ -23,7 +23,8 @@ const sendPushNotification = async (
   messageBody,
   data = {},
   title = "New Message",
-  badge = 0
+  badge = 0,
+  tag = null
 ) => {
   try {
     let messageTokens = somePushTokens.filter(token => typeof token === 'string' && token.length > 0);
@@ -50,14 +51,16 @@ const sendPushNotification = async (
         android: {
             notification: {
                 sound: 'default',
-                notificationCount: badge
+                notificationCount: badge,
+                ...(tag && { tag: tag })
             }
         },
         apns: {
             payload: {
                 aps: {
                     sound: 'default',
-                    badge: badge
+                    badge: badge,
+                    ...(tag && { 'thread-id': tag })
                 }
             }
         }
