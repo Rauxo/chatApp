@@ -60,6 +60,34 @@ const userSchema = mongoose.Schema({
     friendRequests: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
+    }],
+    unreadMessagesCount: {
+        type: Number,
+        default: 0
+    },
+    pendingFriendRequestsCount: {
+        type: Number,
+        default: 0
+    },
+    notifications: [{
+        type: {
+            type: String,
+            enum: ['chat', 'friend_request'],
+            required: true
+        },
+        senderId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        message: String,
+        isRead: {
+            type: Boolean,
+            default: false
+        },
+        createdAt: {
+            type: Date,
+            default: Date.now
+        }
     }]
 }, {
     timestamps: true

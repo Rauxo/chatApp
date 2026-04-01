@@ -139,18 +139,39 @@ const sendMessage = async (req, res) => {
         }
 
         // Always attempt to send push notification if receiver has a token
-        const receiver = await User.findById(receiverId);
-        if (receiver && receiver.pushToken) {
-            // Calculate unread count for badge
-            const unreadCount = await Message.countDocuments({ receiverId, status: 'unseen' });
-            
-            await sendPushNotification(
-                [receiver.pushToken],
-                messageText.length > 50 ? messageText.substring(0, 50) + '...' : messageText,
-                { type: 'chat', senderId: senderId.toString() },
-                `${req.user.name}`,
-                unreadCount
-            );
+        const receiver = await User.findByIdAndUpdate(receiverId, {
+            $inc: { unreadMessagesCount: 1 },
+            $push: {
+                notifications: {
+                    $each: [{
+                        type: 'chat',
+                        senderId: senderId,
+                        message: messageText.length > 50 ? messageText.substring(0, 50) + '...' : messageText,
+                        createdAt: new Date()
+                    }],
+                    $slice: -20 // Keep last 20 notifications
+                }
+            }
+        }, { new: true });
+
+        if (receiver) {
+            // Emit sync event for real-time badge updates
+            if (receiverSocketId) {
+                io.to(receiverSocketId).emit('unread_sync', {
+                    unreadMessagesCount: receiver.unreadMessagesCount,
+                    pendingFriendRequestsCount: receiver.pendingFriendRequestsCount
+                });
+            }
+
+            if (receiver.pushToken) {
+                await sendPushNotification(
+                    [receiver.pushToken],
+                    messageText.length > 50 ? messageText.substring(0, 50) + '...' : messageText,
+                    { type: 'chat', senderId: senderId.toString() },
+                    `${req.user.name}`,
+                    receiver.unreadMessagesCount + receiver.pendingFriendRequestsCount
+                );
+            }
         }
 
         res.json(populatedMessage);
@@ -248,7 +269,34 @@ const sendFriendRequest = async (req, res) => {
             return res.status(400).json({ message: 'Friend request already sent' });
         }
 
-        await User.findByIdAndUpdate(targetUserId, { $addToSet: { friendRequests: fromId } });
+        await User.findByIdAndUpdate(targetUserId, { 
+            $addToSet: { friendRequests: fromId },
+            $inc: { pendingFriendRequestsCount: 1 },
+            $push: {
+                notifications: {
+                    $each: [{
+                        type: 'friend_request',
+                        senderId: fromId,
+                        message: `${req.user.name} sent you a friend request!`,
+                        createdAt: new Date()
+                    }],
+                    $slice: -20
+                }
+            }
+        }, { new: true });
+
+        // Get target again for updated count and socket
+        const targetUpdated = await User.findById(targetUserId);
+        const io = req.app.get('io');
+        const connectedUsers = req.app.get('connectedUsers');
+        const targetSocketId = connectedUsers.get(targetUserId);
+
+        if (targetSocketId && targetUpdated) {
+            io.to(targetSocketId).emit('unread_sync', {
+                unreadMessagesCount: targetUpdated.unreadMessagesCount,
+                pendingFriendRequestsCount: targetUpdated.pendingFriendRequestsCount
+            });
+        }
 
         // Send Push Notification
         if (target.pushToken) {
@@ -256,7 +304,8 @@ const sendFriendRequest = async (req, res) => {
                 [target.pushToken],
                 `${req.user.name} sent you a friend request!`,
                 { type: 'friend_request' },
-                'New Friend Request'
+                'New Friend Request',
+                (targetUpdated?.unreadMessagesCount || 0) + (targetUpdated?.pendingFriendRequestsCount || 0)
             );
         }
 
@@ -280,9 +329,11 @@ const acceptFriendRequest = async (req, res) => {
         if (!isRequested) return res.status(400).json({ message: 'No friend request from this user' });
 
         // Add to friends on both sides, remove from friendRequests
+        // Add to friends on both sides, remove from friendRequests, decrement count
         await User.findByIdAndUpdate(myId, {
             $addToSet: { friends: requesterId },
-            $pull: { friendRequests: requesterId }
+            $pull: { friendRequests: requesterId },
+            $inc: { pendingFriendRequestsCount: -1 }
         });
         await User.findByIdAndUpdate(requesterId, {
             $addToSet: { friends: myId }
@@ -317,6 +368,71 @@ const getMyFriendRequests = async (req, res) => {
     }
 };
 
+const markAsRead = async (req, res) => {
+    try {
+        const userId = req.user._id;
+        const { senderId, type } = req.body; // type: 'chat' or 'all'
+
+        if (type === 'chat' && senderId) {
+            // Count how many unseen messages from this sender
+            const unseenCount = await Message.countDocuments({
+                senderId,
+                receiverId: userId,
+                status: 'unseen'
+            });
+
+            // Mark all messages from this sender to me as seen
+            await Message.updateMany(
+                { senderId, receiverId: userId, status: 'unseen' },
+                { status: 'seen' }
+            );
+
+            // Decrement unreadMessagesCount in User model
+            const updatedUser = await User.findByIdAndUpdate(
+                userId,
+                { $inc: { unreadMessagesCount: -unseenCount < 0 ? -unseenCount : 0 } },
+                { new: true }
+            );
+            
+            // Ensure count doesn't go below 0
+            if (updatedUser.unreadMessagesCount < 0) {
+                updatedUser.unreadMessagesCount = 0;
+                await updatedUser.save();
+            }
+
+            res.json({ success: true, unreadMessagesCount: updatedUser.unreadMessagesCount });
+        } else if (type === 'all_notifications') {
+            await User.findByIdAndUpdate(userId, {
+                'notifications.$[].isRead': true
+            });
+            res.json({ success: true });
+        } else {
+            // Clear all message count (for app badge reset)
+            await User.findByIdAndUpdate(userId, { unreadMessagesCount: 0 });
+            await Message.updateMany({ receiverId: userId, status: 'unseen' }, { status: 'seen' });
+            res.json({ success: true });
+        }
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+const getNotifications = async (req, res) => {
+    try {
+        const user = await User.findById(req.user._id)
+            .populate('notifications.senderId', 'name avatar')
+            .select('notifications');
+        
+        if (!user) return res.status(404).json({ message: 'User not found' });
+        
+        // Return sorted by date
+        const sortedNotifications = user.notifications.sort((a, b) => b.createdAt - a.createdAt);
+        res.json(sortedNotifications);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
 const getUserById = async (req, res) => {
     try {
         const user = await User.findById(req.params.userId).select('-password -otp -otpExpiry');
@@ -327,5 +443,22 @@ const getUserById = async (req, res) => {
     }
 };
 
-module.exports = { getUsers, updateProfile, uploadAvatar, updatePushToken, getMessages, sendMessage, getMe, updatePublicKey, getPublicKey, getFriends, sendFriendRequest, acceptFriendRequest, getMyFriendRequests, getUserById };
+module.exports = { 
+    getUsers, 
+    updateProfile, 
+    uploadAvatar, 
+    updatePushToken, 
+    getMessages, 
+    sendMessage, 
+    getMe, 
+    updatePublicKey, 
+    getPublicKey, 
+    getFriends, 
+    sendFriendRequest, 
+    acceptFriendRequest, 
+    getMyFriendRequests, 
+    getUserById,
+    markAsRead,
+    getNotifications
+};
 

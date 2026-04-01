@@ -77,6 +77,46 @@ io.on('connection', (socket) => {
         }
     });
 
+    socket.on('mark_seen_all', async ({ senderId, userId }) => {
+        try {
+            // Count unseen messages before marking them seen
+            const unseenCount = await Message.countDocuments({
+                senderId,
+                receiverId: userId,
+                status: 'unseen'
+            });
+
+            if (unseenCount > 0) {
+                await Message.updateMany(
+                    { senderId, receiverId: userId, status: 'unseen' },
+                    { status: 'seen' }
+                );
+
+                const updatedUser = await User.findByIdAndUpdate(
+                    userId,
+                    { $inc: { unreadMessagesCount: -unseenCount } },
+                    { new: true }
+                );
+
+                if (updatedUser.unreadMessagesCount < 0) {
+                    updatedUser.unreadMessagesCount = 0;
+                    await updatedUser.save();
+                }
+
+                // Sync to all sockets of this user (cross-device)
+                const userSocketId = connectedUsers.get(userId.toString());
+                if (userSocketId) {
+                    io.to(userSocketId).emit('unread_sync', {
+                        unreadMessagesCount: updatedUser.unreadMessagesCount,
+                        pendingFriendRequestsCount: updatedUser.pendingFriendRequestsCount
+                    });
+                }
+            }
+        } catch (error) {
+            console.error('Error in mark_seen_all:', error);
+        }
+    });
+
     // when a user disconnects
     socket.on('disconnect', async () => {
         let disconnectedUserId = null;

@@ -32,6 +32,9 @@ router.route('/friends').get(protect, getFriends);
 router.route('/friend-requests').get(protect, getMyFriendRequests);
 router.route('/friend-request').post(protect, sendFriendRequest);
 router.route('/friend-request/accept').post(protect, acceptFriendRequest);
+router.route('/mark-read').post(protect, markAsRead);
+router.route('/notifications').get(protect, getNotifications);
+
 router.route('/:userId/profile').get(protect, getUserById);
 
 module.exports = router;
