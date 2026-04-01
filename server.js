@@ -36,12 +36,14 @@ const io = new Server(server, {
 const authRoutes = require('./routes/authRoutes');
 const userRoutes = require('./routes/userRoutes');
 const adminRoutes = require('./routes/adminRoutes');
+const momentRoutes = require('./routes/momentRoutes');
 const Message = require('./models/Message');
 const User = require('./models/User');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/moments', momentRoutes);
 
 app.get('/', (req, res) => {
     res.send('WeeChat Backend is running...');
