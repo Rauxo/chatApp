@@ -1,5 +1,5 @@
 const express = require('express');
-const { getUsers, updateProfile, uploadAvatar, updatePushToken, getMessages, sendMessage, getMe, updatePublicKey, getPublicKey, getFriends, sendFriendRequest, acceptFriendRequest, getMyFriendRequests, getUserById } = require('../controllers/userController');
+const { getUsers, updateProfile, uploadAvatar, updatePushToken, getMessages, sendMessage, getMe, updatePublicKey, getPublicKey, getFriends, sendFriendRequest, acceptFriendRequest, getMyFriendRequests, getUserById, markAsRead, getNotifications } = require('../controllers/userController');
 const { protect } = require('../middlewares/authMiddleware');
 const multer = require('multer');
 const path = require('path');
