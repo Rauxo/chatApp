@@ -24,7 +24,6 @@ const messageSchema = mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Message'
     },
-    // Edit / Delete support
     isEdited: {
         type: Boolean,
         default: false

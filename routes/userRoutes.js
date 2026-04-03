@@ -26,8 +26,9 @@ router.route('/:userId/public-key').get(protect, getPublicKey);
 
 router.route('/messages/:userId').get(protect, getMessages);
 router.route('/messages').post(protect, sendMessage);
-router.route('/messages/:messageId').put(protect, editMessage);
-router.route('/messages/:messageId').delete(protect, deleteMessage);
+router.route('/messages/:messageId')
+    .put(protect, editMessage)
+    .delete(protect, deleteMessage);
 
 // ─── FRIEND SYSTEM (NEW) ───────────────────────────
 router.route('/friends').get(protect, getFriends);
