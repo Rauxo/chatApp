@@ -20,8 +20,8 @@ const getUsers = async (req, res) => {
 
             const lastMessage = await Message.findOne({
                 $or: [
-                    { senderId: currentUser, receiverId: u._id },
-                    { senderId: u._id, receiverId: currentUser }
+                    { senderId: currentUser, receiverId: u._id, deletedForSender: { $ne: true }, isDeletedForBoth: { $ne: true } },
+                    { senderId: u._id, receiverId: currentUser, deletedForReceiver: { $ne: true }, isDeletedForBoth: { $ne: true } }
                 ]
             }).sort({ createdAt: -1 }).lean();
 
@@ -99,15 +99,25 @@ const getMessages = async (req, res) => {
     try {
         const user1 = req.user._id;
         const user2 = req.params.userId;
+        const page = parseInt(req.query.page);
+        const limit = parseInt(req.query.limit);
 
-        const messages = await Message.find({
+        let query = Message.find({
             $or: [
                 { senderId: user1, receiverId: user2 },
                 { senderId: user2, receiverId: user1 }
             ]
         })
-        .populate('replyTo', 'message senderId createdAt')
-        .sort({ createdAt: 1 });
+        .populate('replyTo', 'message senderId createdAt');
+
+        if (page && limit) {
+            const skip = (page - 1) * limit;
+            query = query.sort({ createdAt: -1 }).skip(skip).limit(limit);
+        } else {
+            query = query.sort({ createdAt: 1 });
+        }
+
+        const messages = await query.exec();
 
         res.json(messages);
     } catch (error) {
@@ -239,8 +249,8 @@ const getFriends = async (req, res) => {
             });
             const lastMessage = await Message.findOne({
                 $or: [
-                    { senderId: currentUser, receiverId: u._id },
-                    { senderId: u._id, receiverId: currentUser }
+                    { senderId: currentUser, receiverId: u._id, deletedForSender: { $ne: true }, isDeletedForBoth: { $ne: true } },
+                    { senderId: u._id, receiverId: currentUser, deletedForReceiver: { $ne: true }, isDeletedForBoth: { $ne: true } }
                 ]
             }).sort({ createdAt: -1 }).lean();
 
