@@ -82,6 +82,21 @@ io.on('connection', (socket) => {
         }
     });
 
+    // ── Typing indicators ──────────────────────────────────────────────────────
+    socket.on('typing_start', ({ senderId, receiverId }) => {
+        const receiverSocketId = connectedUsers.get(receiverId);
+        if (receiverSocketId) {
+            io.to(receiverSocketId).emit('typing_start', { senderId });
+        }
+    });
+
+    socket.on('typing_stop', ({ senderId, receiverId }) => {
+        const receiverSocketId = connectedUsers.get(receiverId);
+        if (receiverSocketId) {
+            io.to(receiverSocketId).emit('typing_stop', { senderId });
+        }
+    });
+
     socket.on('mark_seen', async ({ messageId }) => {
         try {
             const message = await Message.findByIdAndUpdate(messageId, { status: 'seen' }, { new: true });

@@ -452,23 +452,116 @@ const getUserById = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+// ──────────────────────────────────────────────────────────────────────────────
+// EDIT MESSAGE (only sender can edit)
+// ──────────────────────────────────────────────────────────────────────────────
+const editMessage = async (req, res) => {
+    try {
+        const { messageId } = req.params;
+        const { newText } = req.body;
+        const userId = req.user._id;
 
-module.exports = { 
-    getUsers, 
-    updateProfile, 
-    uploadAvatar, 
-    updatePushToken, 
-    getMessages, 
-    sendMessage, 
-    getMe, 
-    updatePublicKey, 
-    getPublicKey, 
-    getFriends, 
-    sendFriendRequest, 
-    acceptFriendRequest, 
-    getMyFriendRequests, 
+        const message = await Message.findById(messageId);
+        if (!message) return res.status(404).json({ message: 'Message not found' });
+        if (message.senderId.toString() !== userId.toString())
+            return res.status(403).json({ message: 'Only the sender can edit a message' });
+        if (message.isDeletedForBoth)
+            return res.status(400).json({ message: 'Cannot edit a deleted message' });
+
+        message.message = newText;
+        message.isEdited = true;
+        await message.save();
+
+        const io = req.app.get('io');
+        const connectedUsers = req.app.get('connectedUsers');
+
+        // Notify both sender and receiver in real time
+        const senderSocketId = connectedUsers.get(message.senderId.toString());
+        const receiverSocketId = connectedUsers.get(message.receiverId.toString());
+        if (senderSocketId) io.to(senderSocketId).emit('message_edited', message);
+        if (receiverSocketId) io.to(receiverSocketId).emit('message_edited', message);
+
+        res.json(message);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// ──────────────────────────────────────────────────────────────────────────────
+// DELETE MESSAGE
+// - Sender:   can delete for themselves only OR for both users
+// - Receiver: can only delete for themselves (hides from their view)
+// ──────────────────────────────────────────────────────────────────────────────
+const deleteMessage = async (req, res) => {
+    try {
+        const { messageId } = req.params;
+        const { deleteForBoth } = req.body; // boolean
+        const userId = req.user._id;
+
+        const message = await Message.findById(messageId);
+        if (!message) return res.status(404).json({ message: 'Message not found' });
+
+        const isSender = message.senderId.toString() === userId.toString();
+        const isReceiver = message.receiverId.toString() === userId.toString();
+
+        if (!isSender && !isReceiver)
+            return res.status(403).json({ message: 'Not authorized' });
+
+        const io = req.app.get('io');
+        const connectedUsers = req.app.get('connectedUsers');
+
+        if (isSender && deleteForBoth) {
+            // Sender deletes for everyone → mark fully deleted
+            message.isDeletedForBoth = true;
+            message.deletedForSender = true;
+            message.deletedForReceiver = true;
+            await message.save();
+
+            // Notify both parties
+            const senderSocketId = connectedUsers.get(message.senderId.toString());
+            const receiverSocketId = connectedUsers.get(message.receiverId.toString());
+            if (senderSocketId) io.to(senderSocketId).emit('message_deleted', { messageId, deleteForBoth: true });
+            if (receiverSocketId) io.to(receiverSocketId).emit('message_deleted', { messageId, deleteForBoth: true });
+        } else if (isSender) {
+            // Sender deletes only from their own view
+            message.deletedForSender = true;
+            await message.save();
+
+            const senderSocketId = connectedUsers.get(message.senderId.toString());
+            if (senderSocketId) io.to(senderSocketId).emit('message_deleted', { messageId, deleteForBoth: false, side: 'sender' });
+        } else if (isReceiver) {
+            // Receiver deletes only from their own view
+            message.deletedForReceiver = true;
+            await message.save();
+
+            const receiverSocketId = connectedUsers.get(message.receiverId.toString());
+            if (receiverSocketId) io.to(receiverSocketId).emit('message_deleted', { messageId, deleteForBoth: false, side: 'receiver' });
+        }
+
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+module.exports = {
+    getUsers,
+    updateProfile,
+    uploadAvatar,
+    updatePushToken,
+    getMessages,
+    sendMessage,
+    getMe,
+    updatePublicKey,
+    getPublicKey,
+    getFriends,
+    sendFriendRequest,
+    acceptFriendRequest,
+    getMyFriendRequests,
     getUserById,
     markAsRead,
-    getNotifications
+    getNotifications,
+    editMessage,
+    deleteMessage
 };
 

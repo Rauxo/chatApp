@@ -1,5 +1,5 @@
 const express = require('express');
-const { getUsers, updateProfile, uploadAvatar, updatePushToken, getMessages, sendMessage, getMe, updatePublicKey, getPublicKey, getFriends, sendFriendRequest, acceptFriendRequest, getMyFriendRequests, getUserById, markAsRead, getNotifications } = require('../controllers/userController');
+const { getUsers, updateProfile, uploadAvatar, updatePushToken, getMessages, sendMessage, getMe, updatePublicKey, getPublicKey, getFriends, sendFriendRequest, acceptFriendRequest, getMyFriendRequests, getUserById, markAsRead, getNotifications, editMessage, deleteMessage } = require('../controllers/userController');
 const { protect } = require('../middlewares/authMiddleware');
 const multer = require('multer');
 const path = require('path');
@@ -26,6 +26,8 @@ router.route('/:userId/public-key').get(protect, getPublicKey);
 
 router.route('/messages/:userId').get(protect, getMessages);
 router.route('/messages').post(protect, sendMessage);
+router.route('/messages/:messageId').put(protect, editMessage);
+router.route('/messages/:messageId').delete(protect, deleteMessage);
 
 // ─── FRIEND SYSTEM (NEW) ───────────────────────────
 router.route('/friends').get(protect, getFriends);

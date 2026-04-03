@@ -23,6 +23,23 @@ const messageSchema = mongoose.Schema({
     replyTo: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Message'
+    },
+    // Edit / Delete support
+    isEdited: {
+        type: Boolean,
+        default: false
+    },
+    deletedForSender: {
+        type: Boolean,
+        default: false
+    },
+    deletedForReceiver: {
+        type: Boolean,
+        default: false
+    },
+    isDeletedForBoth: {
+        type: Boolean,
+        default: false
     }
 }, {
     timestamps: true
