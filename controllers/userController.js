@@ -22,12 +22,6 @@ const getUsers = async (req, res) => {
                 $or: [
                     { senderId: currentUser, receiverId: u._id },
                     { senderId: u._id, receiverId: currentUser }
-                ],
-                // Exclude messages deleted for current user
-                isDeletedForBoth: { $ne: true },
-                $or: [
-                    { senderId: currentUser, deletedForSender: { $ne: true } },
-                    { receiverId: currentUser, deletedForReceiver: { $ne: true } }
                 ]
             }).sort({ createdAt: -1 }).lean();
 
@@ -39,13 +33,6 @@ const getUsers = async (req, res) => {
                     : null
             };
         }));
-
-        // Sort by newest first
-        usersWithUnread.sort((a, b) => {
-            const dateA = a.lastMessage ? new Date(a.lastMessage.createdAt) : new Date(0);
-            const dateB = b.lastMessage ? new Date(b.lastMessage.createdAt) : new Date(0);
-            return dateB - dateA;
-        });
 
         res.json(usersWithUnread);
     } catch (error) {
@@ -112,25 +99,15 @@ const getMessages = async (req, res) => {
     try {
         const user1 = req.user._id;
         const user2 = req.params.userId;
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 50;
-        const skip = (page - 1) * limit;
 
         const messages = await Message.find({
             $or: [
                 { senderId: user1, receiverId: user2 },
                 { senderId: user2, receiverId: user1 }
-            ],
-            isDeletedForBoth: { $ne: true },
-            $or: [
-                { senderId: user1, deletedForSender: { $ne: true } },
-                { receiverId: user1, deletedForReceiver: { $ne: true } }
             ]
         })
         .populate('replyTo', 'message senderId createdAt')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit);
+        .sort({ createdAt: 1 });
 
         res.json(messages);
     } catch (error) {
@@ -153,10 +130,13 @@ const sendMessage = async (req, res) => {
             .populate('replyTo', 'message senderId createdAt');
 
         const io = req.app.get('io');
-        
-        // Notify both receiver and sender (for real-time chat tab updates)
-        io.to(receiverId.toString()).emit('receive_message', populatedMessage);
-        io.to(senderId.toString()).emit('receive_message', populatedMessage);
+        const connectedUsers = req.app.get('connectedUsers');
+
+        const receiverSocketId = connectedUsers.get(receiverId);
+
+        if (receiverSocketId) {
+            io.to(receiverSocketId).emit('receive_message', populatedMessage);
+        }
 
         // Always attempt to send push notification if receiver has a token
         const receiver = await User.findByIdAndUpdate(receiverId, {
@@ -176,20 +156,30 @@ const sendMessage = async (req, res) => {
 
         if (receiver) {
             // Emit sync event for real-time badge updates
-            io.to(receiverId.toString()).emit('unread_sync', {
-                unreadMessagesCount: receiver.unreadMessagesCount,
-                pendingFriendRequestsCount: receiver.pendingFriendRequestsCount
-            });
+            if (receiverSocketId) {
+                io.to(receiverSocketId).emit('unread_sync', {
+                    unreadMessagesCount: receiver.unreadMessagesCount,
+                    pendingFriendRequestsCount: receiver.pendingFriendRequestsCount
+                });
+            }
 
-            if (receiver.pushToken) {
-                const pushMsg = notificationText ? notificationText : messageText;
+            // ── Bug Fix #3: Skip FCM push if receiver is actively viewing this sender's chat ──
+            const activeChats = req.app.get('activeChats');
+            const receiverActiveChatPartnerId = activeChats ? activeChats.get(receiverId) : null;
+            const receiverIsInThisChat = receiverActiveChatPartnerId === senderId.toString();
+
+            if (receiver.pushToken && !receiverIsInThisChat) {
+                // ── Bug Fix #1: Always use plain-text notificationText (never encrypted messageText) ──
+                const pushMsg = notificationText
+                    ? notificationText
+                    : '[New message]'; // Fallback if notificationText not provided
                 await sendPushNotification(
                     [receiver.pushToken],
                     pushMsg.length > 50 ? pushMsg.substring(0, 50) + '...' : pushMsg,
                     { type: 'chat', senderId: senderId.toString() },
                     `${req.user.name}`,
                     receiver.unreadMessagesCount + receiver.pendingFriendRequestsCount,
-                    `chat_${senderId}`
+                    `chat_${senderId}` // ── Bug Fix #2: tag ensures Android collapses notifications from same sender
                 );
             }
         }
@@ -251,11 +241,6 @@ const getFriends = async (req, res) => {
                 $or: [
                     { senderId: currentUser, receiverId: u._id },
                     { senderId: u._id, receiverId: currentUser }
-                ],
-                isDeletedForBoth: { $ne: true },
-                $or: [
-                    { senderId: currentUser, deletedForSender: { $ne: true } },
-                    { receiverId: currentUser, deletedForReceiver: { $ne: true } }
                 ]
             }).sort({ createdAt: -1 }).lean();
 
@@ -267,13 +252,6 @@ const getFriends = async (req, res) => {
                     : null
             };
         }));
-
-        // Sort by newest first
-        friendsWithData.sort((a, b) => {
-            const dateA = a.lastMessage ? new Date(a.lastMessage.createdAt) : new Date(0);
-            const dateB = b.lastMessage ? new Date(b.lastMessage.createdAt) : new Date(0);
-            return dateB - dateA;
-        });
 
         res.json(friendsWithData);
     } catch (error) {
@@ -320,10 +298,15 @@ const sendFriendRequest = async (req, res) => {
         // Get target again for updated count and socket
         const targetUpdated = await User.findById(targetUserId);
         const io = req.app.get('io');
-        io.to(targetUserId.toString()).emit('unread_sync', {
-            unreadMessagesCount: targetUpdated.unreadMessagesCount,
-            pendingFriendRequestsCount: targetUpdated.pendingFriendRequestsCount
-        });
+        const connectedUsers = req.app.get('connectedUsers');
+        const targetSocketId = connectedUsers.get(targetUserId);
+
+        if (targetSocketId && targetUpdated) {
+            io.to(targetSocketId).emit('unread_sync', {
+                unreadMessagesCount: targetUpdated.unreadMessagesCount,
+                pendingFriendRequestsCount: targetUpdated.pendingFriendRequestsCount
+            });
+        }
 
         // Send Push Notification
         if (target.pushToken) {
@@ -460,79 +443,6 @@ const getNotifications = async (req, res) => {
     }
 };
 
-const editMessage = async (req, res) => {
-    try {
-        const { messageId } = req.params;
-        const { newText } = req.body;
-        const userId = req.user._id;
-
-        const message = await Message.findById(messageId);
-        if (!message) return res.status(404).json({ message: 'Message not found' });
-        if (message.senderId.toString() !== userId.toString()) return res.status(403).json({ message: 'Not authorized' });
-
-        message.message = newText;
-        message.isEdited = true;
-        await message.save();
-
-        const populated = await Message.findById(messageId).populate('replyTo', 'message senderId createdAt');
-        
-        const io = req.app.get('io');
-        
-        // Notify both sender and receiver room
-        const participants = [message.senderId.toString(), message.receiverId.toString()];
-        participants.forEach(pId => {
-            io.to(pId).emit('message_edited', populated);
-        });
-
-        res.json(populated);
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-};
-
-const deleteMessage = async (req, res) => {
-    try {
-        const { messageId } = req.params;
-        const { deleteForBoth } = req.body;
-        const userId = req.user._id;
-
-        const message = await Message.findById(messageId);
-        if (!message) return res.status(404).json({ message: 'Message not found' });
-
-        const isSender = message.senderId.toString() === userId.toString();
-        const isReceiver = message.receiverId.toString() === userId.toString();
-
-        if (!isSender && !isReceiver) return res.status(403).json({ message: 'Not authorized' });
-
-        if (deleteForBoth) {
-            if (!isSender) return res.status(403).json({ message: 'Only sender can delete for everyone' });
-            message.isDeletedForBoth = true;
-        } else {
-            if (isSender) message.deletedForSender = true;
-            else message.deletedForReceiver = true;
-        }
-
-        await message.save();
-
-        const io = req.app.get('io');
- 
-        // Notify participants
-        const participants = [message.senderId.toString(), message.receiverId.toString()];
-        participants.forEach(pId => {
-            io.to(pId).emit('message_deleted', { 
-                messageId, 
-                deleteForBoth,
-                senderId: message.senderId,
-                receiverId: message.receiverId
-            });
-        });
-
-        res.json({ success: true });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-};
-
 const getUserById = async (req, res) => {
     try {
         const user = await User.findById(req.params.userId).select('-password -otp -otpExpiry');
@@ -542,21 +452,112 @@ const getUserById = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+// ──────────────────────────────────────────────────────────────────────────────
+// EDIT MESSAGE (only sender can edit)
+// ──────────────────────────────────────────────────────────────────────────────
+const editMessage = async (req, res) => {
+    try {
+        const { messageId } = req.params;
+        const { newText } = req.body;
+        const userId = req.user._id;
 
-module.exports = { 
-    getUsers, 
-    updateProfile, 
-    uploadAvatar, 
-    updatePushToken, 
-    getMessages, 
-    sendMessage, 
-    getMe, 
-    updatePublicKey, 
-    getPublicKey, 
-    getFriends, 
-    sendFriendRequest, 
-    acceptFriendRequest, 
-    getMyFriendRequests, 
+        const message = await Message.findById(messageId);
+        if (!message) return res.status(404).json({ message: 'Message not found' });
+        if (message.senderId.toString() !== userId.toString())
+            return res.status(403).json({ message: 'Only the sender can edit a message' });
+        if (message.isDeletedForBoth)
+            return res.status(400).json({ message: 'Cannot edit a deleted message' });
+
+        message.message = newText;
+        message.isEdited = true;
+        await message.save();
+
+        const io = req.app.get('io');
+        const connectedUsers = req.app.get('connectedUsers');
+
+        // Notify both sender and receiver in real time
+        const senderSocketId = connectedUsers.get(message.senderId.toString());
+        const receiverSocketId = connectedUsers.get(message.receiverId.toString());
+        if (senderSocketId) io.to(senderSocketId).emit('message_edited', message);
+        if (receiverSocketId) io.to(receiverSocketId).emit('message_edited', message);
+
+        res.json(message);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// ──────────────────────────────────────────────────────────────────────────────
+// DELETE MESSAGE
+// - Sender:   can delete for themselves only OR for both users
+// - Receiver: can only delete for themselves (hides from their view)
+// ──────────────────────────────────────────────────────────────────────────────
+const deleteMessage = async (req, res) => {
+    try {
+        const { messageId } = req.params;
+        const { deleteForBoth } = req.body; // boolean
+        const userId = req.user._id;
+
+        const message = await Message.findById(messageId);
+        if (!message) return res.status(404).json({ message: 'Message not found' });
+
+        const isSender = message.senderId.toString() === userId.toString();
+        const isReceiver = message.receiverId.toString() === userId.toString();
+
+        if (!isSender && !isReceiver)
+            return res.status(403).json({ message: 'Not authorized' });
+
+        const io = req.app.get('io');
+        const connectedUsers = req.app.get('connectedUsers');
+
+        if (isSender && deleteForBoth) {
+            // Sender deletes for everyone → mark fully deleted
+            message.isDeletedForBoth = true;
+            message.deletedForSender = true;
+            message.deletedForReceiver = true;
+            await message.save();
+
+            // Notify both parties
+            const senderSocketId = connectedUsers.get(message.senderId.toString());
+            const receiverSocketId = connectedUsers.get(message.receiverId.toString());
+            if (senderSocketId) io.to(senderSocketId).emit('message_deleted', { messageId, deleteForBoth: true });
+            if (receiverSocketId) io.to(receiverSocketId).emit('message_deleted', { messageId, deleteForBoth: true });
+        } else if (isSender) {
+            // Sender deletes only from their own view
+            message.deletedForSender = true;
+            await message.save();
+
+            const senderSocketId = connectedUsers.get(message.senderId.toString());
+            if (senderSocketId) io.to(senderSocketId).emit('message_deleted', { messageId, deleteForBoth: false, side: 'sender' });
+        } else if (isReceiver) {
+            // Receiver deletes only from their own view
+            message.deletedForReceiver = true;
+            await message.save();
+
+            const receiverSocketId = connectedUsers.get(message.receiverId.toString());
+            if (receiverSocketId) io.to(receiverSocketId).emit('message_deleted', { messageId, deleteForBoth: false, side: 'receiver' });
+        }
+
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+module.exports = {
+    getUsers,
+    updateProfile,
+    uploadAvatar,
+    updatePushToken,
+    getMessages,
+    sendMessage,
+    getMe,
+    updatePublicKey,
+    getPublicKey,
+    getFriends,
+    sendFriendRequest,
+    acceptFriendRequest,
+    getMyFriendRequests,
     getUserById,
     markAsRead,
     getNotifications,
