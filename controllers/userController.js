@@ -125,14 +125,25 @@ const getMessages = async (req, res) => {
     }
 };
 
+const uploadMessageMedia = async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
+        res.json({ mediaUrl: `/uploads/${req.file.filename}` });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
 const sendMessage = async (req, res) => {
     try {
-        const { receiverId, messageText, replyToId, notificationText } = req.body;
+        const { receiverId, messageText, replyToId, notificationText, mediaUrl, mediaType } = req.body;
         const senderId = req.user._id;
         const message = await Message.create({
             senderId,
             receiverId,
-            message: messageText,
+            message: messageText || "",
+            mediaUrl,
+            mediaType,
             replyTo: replyToId && mongoose.Types.ObjectId.isValid(replyToId) ? replyToId : undefined
         });
 
@@ -554,6 +565,38 @@ const deleteMessage = async (req, res) => {
     }
 };
 
+const reactToMessage = async (req, res) => {
+    try {
+        const { messageId } = req.params;
+        const { emoji } = req.body;
+        const userId = req.user._id.toString();
+
+        const message = await Message.findById(messageId);
+        if (!message) return res.status(404).json({ message: 'Message not found' });
+
+        if (!message.reactions) message.reactions = new Map();
+
+        if (message.reactions.get(userId) === emoji) {
+            message.reactions.delete(userId);
+        } else {
+            message.reactions.set(userId, emoji);
+        }
+        await message.save();
+
+        const io = req.app.get('io');
+        const connectedUsers = req.app.get('connectedUsers');
+
+        const senderSocketId = connectedUsers.get(message.senderId.toString());
+        const receiverSocketId = connectedUsers.get(message.receiverId.toString());
+        if (senderSocketId) io.to(senderSocketId).emit('message_reacted', message);
+        if (receiverSocketId) io.to(receiverSocketId).emit('message_reacted', message);
+
+        res.json(message);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
 module.exports = {
     getUsers,
     updateProfile,
@@ -572,6 +615,8 @@ module.exports = {
     markAsRead,
     getNotifications,
     editMessage,
-    deleteMessage
+    deleteMessage,
+    uploadMessageMedia,
+    reactToMessage
 };
 

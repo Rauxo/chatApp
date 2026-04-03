@@ -13,7 +13,19 @@ const messageSchema = mongoose.Schema({
     },
     message: {
         type: String,
-        required: true
+        default: ""
+    },
+    mediaUrl: {
+        type: String
+    },
+    mediaType: {
+        type: String,
+        enum: ['image', 'video']
+    },
+    reactions: {
+        type: Map,
+        of: String,
+        default: {}
     },
     status: {
         type: String,
