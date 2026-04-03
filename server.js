@@ -52,6 +52,9 @@ app.get('/', (req, res) => {
 // Store connected users mapping (userId -> socketId)
 const connectedUsers = new Map();
 
+// Store active chat sessions: userId -> chatPartnerId (whose chat screen they're viewing)
+const activeChats = new Map();
+
 io.on('connection', (socket) => {
     console.log(`Socket connected: ${socket.id}`);
 
@@ -63,6 +66,20 @@ io.on('connection', (socket) => {
         // Update user to online
         await User.findByIdAndUpdate(userId, { isOnline: true });
         io.emit('userOnline', userId); // broadcast everyone that user is online
+    });
+
+    // Track when a user opens a specific chat screen
+    socket.on('set_active_chat', ({ userId, chatPartnerId }) => {
+        if (userId && chatPartnerId) {
+            activeChats.set(userId, chatPartnerId);
+        }
+    });
+
+    // Track when a user leaves a chat screen
+    socket.on('clear_active_chat', ({ userId }) => {
+        if (userId) {
+            activeChats.delete(userId);
+        }
     });
 
     socket.on('mark_seen', async ({ messageId }) => {
@@ -131,6 +148,8 @@ io.on('connection', (socket) => {
         }
         
         if (disconnectedUserId) {
+            // Also clear active chat tracking on disconnect
+            activeChats.delete(disconnectedUserId);
             await User.findByIdAndUpdate(disconnectedUserId, { isOnline: false, lastActive: new Date() });
             io.emit('userOffline', { userId: disconnectedUserId, lastActive: new Date() });
         }
@@ -141,6 +160,7 @@ io.on('connection', (socket) => {
 // Export io so it can be used in controllers
 app.set('io', io);
 app.set('connectedUsers', connectedUsers);
+app.set('activeChats', activeChats);
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log(`Server started on port ${PORT}`));

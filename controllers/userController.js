@@ -163,15 +163,23 @@ const sendMessage = async (req, res) => {
                 });
             }
 
-            if (receiver.pushToken) {
-                const pushMsg = notificationText ? notificationText : messageText;
+            // ── Bug Fix #3: Skip FCM push if receiver is actively viewing this sender's chat ──
+            const activeChats = req.app.get('activeChats');
+            const receiverActiveChatPartnerId = activeChats ? activeChats.get(receiverId) : null;
+            const receiverIsInThisChat = receiverActiveChatPartnerId === senderId.toString();
+
+            if (receiver.pushToken && !receiverIsInThisChat) {
+                // ── Bug Fix #1: Always use plain-text notificationText (never encrypted messageText) ──
+                const pushMsg = notificationText
+                    ? notificationText
+                    : '[New message]'; // Fallback if notificationText not provided
                 await sendPushNotification(
                     [receiver.pushToken],
                     pushMsg.length > 50 ? pushMsg.substring(0, 50) + '...' : pushMsg,
                     { type: 'chat', senderId: senderId.toString() },
                     `${req.user.name}`,
                     receiver.unreadMessagesCount + receiver.pendingFriendRequestsCount,
-                    `chat_${senderId}`
+                    `chat_${senderId}` // ── Bug Fix #2: tag ensures Android collapses notifications from same sender
                 );
             }
         }
