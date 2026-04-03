@@ -59,6 +59,7 @@ io.on('connection', (socket) => {
     socket.on('register', async (userId) => {
         if (!userId) return;
         connectedUsers.set(userId, socket.id);
+        socket.join(userId.toString());
         
         // Update user to online
         await User.findByIdAndUpdate(userId, { isOnline: true });
@@ -69,10 +70,7 @@ io.on('connection', (socket) => {
         try {
             const message = await Message.findByIdAndUpdate(messageId, { status: 'seen' }, { new: true });
             if (message) {
-                const senderSocketId = connectedUsers.get(message.senderId.toString());
-                if (senderSocketId) {
-                    io.to(senderSocketId).emit('message_seen', message);
-                }
+                io.to(message.senderId.toString()).emit('message_seen', message);
             }
         } catch (error) {
             console.error('Error marking message seen:', error);
@@ -106,17 +104,22 @@ io.on('connection', (socket) => {
                 }
 
                 // Sync to all sockets of this user (cross-device)
-                const userSocketId = connectedUsers.get(userId.toString());
-                if (userSocketId) {
-                    io.to(userSocketId).emit('unread_sync', {
-                        unreadMessagesCount: updatedUser.unreadMessagesCount,
-                        pendingFriendRequestsCount: updatedUser.pendingFriendRequestsCount
-                    });
-                }
+                io.to(userId.toString()).emit('unread_sync', {
+                    unreadMessagesCount: updatedUser.unreadMessagesCount,
+                    pendingFriendRequestsCount: updatedUser.pendingFriendRequestsCount
+                });
             }
         } catch (error) {
             console.error('Error in mark_seen_all:', error);
         }
+    });
+
+    socket.on('typing_start', ({ senderId, receiverId }) => {
+        io.to(receiverId.toString()).emit('typing_start', { senderId });
+    });
+
+    socket.on('typing_stop', ({ senderId, receiverId }) => {
+        io.to(receiverId.toString()).emit('typing_stop', { senderId });
     });
 
     // when a user disconnects

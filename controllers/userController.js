@@ -153,13 +153,10 @@ const sendMessage = async (req, res) => {
             .populate('replyTo', 'message senderId createdAt');
 
         const io = req.app.get('io');
-        const connectedUsers = req.app.get('connectedUsers');
-
-        const receiverSocketId = connectedUsers.get(receiverId);
-
-        if (receiverSocketId) {
-            io.to(receiverSocketId).emit('receive_message', populatedMessage);
-        }
+        
+        // Notify both receiver and sender (for real-time chat tab updates)
+        io.to(receiverId.toString()).emit('receive_message', populatedMessage);
+        io.to(senderId.toString()).emit('receive_message', populatedMessage);
 
         // Always attempt to send push notification if receiver has a token
         const receiver = await User.findByIdAndUpdate(receiverId, {
@@ -179,12 +176,10 @@ const sendMessage = async (req, res) => {
 
         if (receiver) {
             // Emit sync event for real-time badge updates
-            if (receiverSocketId) {
-                io.to(receiverSocketId).emit('unread_sync', {
-                    unreadMessagesCount: receiver.unreadMessagesCount,
-                    pendingFriendRequestsCount: receiver.pendingFriendRequestsCount
-                });
-            }
+            io.to(receiverId.toString()).emit('unread_sync', {
+                unreadMessagesCount: receiver.unreadMessagesCount,
+                pendingFriendRequestsCount: receiver.pendingFriendRequestsCount
+            });
 
             if (receiver.pushToken) {
                 const pushMsg = notificationText ? notificationText : messageText;
@@ -325,15 +320,10 @@ const sendFriendRequest = async (req, res) => {
         // Get target again for updated count and socket
         const targetUpdated = await User.findById(targetUserId);
         const io = req.app.get('io');
-        const connectedUsers = req.app.get('connectedUsers');
-        const targetSocketId = connectedUsers.get(targetUserId);
-
-        if (targetSocketId && targetUpdated) {
-            io.to(targetSocketId).emit('unread_sync', {
-                unreadMessagesCount: targetUpdated.unreadMessagesCount,
-                pendingFriendRequestsCount: targetUpdated.pendingFriendRequestsCount
-            });
-        }
+        io.to(targetUserId.toString()).emit('unread_sync', {
+            unreadMessagesCount: targetUpdated.unreadMessagesCount,
+            pendingFriendRequestsCount: targetUpdated.pendingFriendRequestsCount
+        });
 
         // Send Push Notification
         if (target.pushToken) {
@@ -487,13 +477,11 @@ const editMessage = async (req, res) => {
         const populated = await Message.findById(messageId).populate('replyTo', 'message senderId createdAt');
         
         const io = req.app.get('io');
-        const connectedUsers = req.app.get('connectedUsers');
         
-        // Notify both sender and receiver
+        // Notify both sender and receiver room
         const participants = [message.senderId.toString(), message.receiverId.toString()];
         participants.forEach(pId => {
-            const sId = connectedUsers.get(pId);
-            if (sId) io.to(sId).emit('message_edited', populated);
+            io.to(pId).emit('message_edited', populated);
         });
 
         res.json(populated);
@@ -527,20 +515,16 @@ const deleteMessage = async (req, res) => {
         await message.save();
 
         const io = req.app.get('io');
-        const connectedUsers = req.app.get('connectedUsers');
-
+ 
         // Notify participants
         const participants = [message.senderId.toString(), message.receiverId.toString()];
         participants.forEach(pId => {
-            const sId = connectedUsers.get(pId);
-            if (sId) {
-                io.to(sId).emit('message_deleted', { 
-                    messageId, 
-                    deleteForBoth,
-                    senderId: message.senderId,
-                    receiverId: message.receiverId
-                });
-            }
+            io.to(pId).emit('message_deleted', { 
+                messageId, 
+                deleteForBoth,
+                senderId: message.senderId,
+                receiverId: message.receiverId
+            });
         });
 
         res.json({ success: true });
