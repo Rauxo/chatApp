@@ -37,6 +37,7 @@ const authRoutes = require('./routes/authRoutes');
 const userRoutes = require('./routes/userRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const momentRoutes = require('./routes/momentRoutes');
+const callRoutes = require('./routes/call');
 const Message = require('./models/Message');
 const User = require('./models/User');
 
@@ -44,6 +45,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/moments', momentRoutes);
+app.use('/api/calls', callRoutes);
 
 app.get('/', (req, res) => {
     res.send('WeeChat Backend is running...');
@@ -148,6 +150,35 @@ io.on('connection', (socket) => {
             }
         } catch (error) {
             console.error('Error in mark_seen_all:', error);
+        }
+    });
+
+    // ── WebRTC Video Call Signaling ────────────────────────────────────────────
+    socket.on('call_user', ({ userToCall, signalData, from, name, avatar }) => {
+        const receiverSocketId = connectedUsers.get(userToCall);
+        if (receiverSocketId) {
+            io.to(receiverSocketId).emit('incoming_call', { signal: signalData, from, name, avatar });
+        }
+    });
+
+    socket.on('call_answered', ({ signal, to }) => {
+        const callerSocketId = connectedUsers.get(to);
+        if (callerSocketId) {
+            io.to(callerSocketId).emit('call_answered', { signal });
+        }
+    });
+
+    socket.on('ice_candidate', ({ to, candidate }) => {
+        const receiverSocketId = connectedUsers.get(to);
+        if (receiverSocketId) {
+            io.to(receiverSocketId).emit('ice_candidate', { candidate });
+        }
+    });
+
+    socket.on('end_call', ({ to }) => {
+        const receiverSocketId = connectedUsers.get(to);
+        if (receiverSocketId) {
+            io.to(receiverSocketId).emit('end_call');
         }
     });
 
